@@ -1,27 +1,27 @@
-package com.prathik.evenly_android;
+package com.prathik.evenly_android.controller;
 
-import android.os.Bundle;
-
-import androidx.activity.EdgeToEdge;
-import androidx.appcompat.app.AppCompatActivity;
-import androidx.core.graphics.Insets;
-import androidx.core.view.ViewCompat;
-import androidx.core.view.WindowInsetsCompat;
-
-import androidx.annotation.NonNull;
-import androidx.fragment.app.Fragment;
-
-import com.google.android.material.bottomnavigation.BottomNavigationView;
 import android.content.Intent;
+import android.os.Bundle;
+import android.view.View;
 import android.widget.Toast;
 
+import androidx.annotation.NonNull;
+import androidx.appcompat.app.AppCompatActivity;
+import androidx.fragment.app.Fragment;
 
 import com.google.android.material.appbar.MaterialToolbar;
+import com.google.android.material.bottomnavigation.BottomNavigationView;
+import com.google.android.material.floatingactionbutton.FloatingActionButton;
+import com.prathik.evenly_android.R;
+import com.prathik.evenly_android.controller.expense.AddExpenseActivity;
 
 public class MainActivity extends AppCompatActivity {
 
     private MaterialToolbar topAppBar;
     private BottomNavigationView bottomNav;
+
+    private FloatingActionButton fabAddExpense;
+    private String currentTab = "GROUPS"; // GROUPS / FRIENDS / ACTIVITY / ACCOUNT
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -30,6 +30,20 @@ public class MainActivity extends AppCompatActivity {
 
         topAppBar = findViewById(R.id.topAppBar);
         bottomNav = findViewById(R.id.bottom_navigation);
+        fabAddExpense = findViewById(R.id.fab_add_expense);
+
+        // FAB click -> open AddExpenseActivity with context
+        fabAddExpense.setOnClickListener(v -> {
+            Intent i = new Intent(this, AddExpenseActivity.class);
+
+            if ("FRIENDS".equals(currentTab)) {
+                i.putExtra(AddExpenseActivity.EXTRA_CONTEXT_TYPE, AddExpenseActivity.CONTEXT_FRIEND);
+            } else {
+                i.putExtra(AddExpenseActivity.EXTRA_CONTEXT_TYPE, AddExpenseActivity.CONTEXT_GROUP);
+            }
+
+            startActivity(i);
+        });
 
         // 1) Handle toolbar icon clicks
         topAppBar.setOnMenuItemClickListener(item -> {
@@ -37,7 +51,6 @@ public class MainActivity extends AppCompatActivity {
 
             // Groups actions
             if (id == R.id.action_add_group) {
-                // next: open CreateGroupActivity
                 Toast.makeText(this, "Add Group (next step)", Toast.LENGTH_SHORT).show();
                 return true;
             }
@@ -48,7 +61,6 @@ public class MainActivity extends AppCompatActivity {
 
             // Friends actions
             if (id == R.id.action_add_friend) {
-                // next: open AddFriendActivity
                 Toast.makeText(this, "Add Friend (next step)", Toast.LENGTH_SHORT).show();
                 return true;
             }
@@ -68,7 +80,9 @@ public class MainActivity extends AppCompatActivity {
 
         // 2) Default tab = Groups
         bottomNav.setSelectedItemId(R.id.nav_groups);
+        currentTab = "GROUPS";
         switchTopBarMenu(R.id.nav_groups);
+        setFabVisibilityForTab(R.id.nav_groups);
         loadFragment(new GroupsFragment());
 
         // 3) Bottom nav switching
@@ -76,14 +90,33 @@ public class MainActivity extends AppCompatActivity {
             int tabId = item.getItemId();
 
             switchTopBarMenu(tabId);
+            setFabVisibilityForTab(tabId);
 
-            if (tabId == R.id.nav_groups) loadFragment(new GroupsFragment());
-            else if (tabId == R.id.nav_friends) loadFragment(new FriendsFragment());
-            else if (tabId == R.id.nav_activity) loadFragment(new ActivityFragment());
-            else if (tabId == R.id.nav_account) loadFragment(new AccountFragment());
+            if (tabId == R.id.nav_groups) {
+                currentTab = "GROUPS";
+                loadFragment(new GroupsFragment());
+            } else if (tabId == R.id.nav_friends) {
+                currentTab = "FRIENDS";
+                loadFragment(new FriendsFragment());
+            } else if (tabId == R.id.nav_activity) {
+                currentTab = "ACTIVITY";
+                loadFragment(new ActivityFragment());
+            } else if (tabId == R.id.nav_account) {
+                currentTab = "ACCOUNT";
+                loadFragment(new AccountFragment());
+            }
 
             return true;
         });
+    }
+
+    private void setFabVisibilityForTab(int tabId) {
+        // FAB only for Groups and Friends
+        if (tabId == R.id.nav_groups || tabId == R.id.nav_friends) {
+            fabAddExpense.setVisibility(View.VISIBLE);
+        } else {
+            fabAddExpense.setVisibility(View.GONE);
+        }
     }
 
     private void switchTopBarMenu(int tabId) {

@@ -12,7 +12,7 @@
         android:supportsRtl="true"
         android:theme="@style/Theme.Evenly_Android">
         <activity
-            android:name=".MainActivity"
+            android:name=".controller.MainActivity"
             android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
@@ -20,6 +20,22 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <activity android:name=".controller.expense.AddExpenseActivity" />
+
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
+
+        <activity android:name=".controller.scan.ReceiptScanActivity" />
+
     </application>
+    <uses-permission android:name="android.permission.INTERNET" />
 
 </manifest>
