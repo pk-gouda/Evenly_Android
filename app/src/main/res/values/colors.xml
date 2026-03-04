@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="topbar_bg">#FFFFFF</color>
+    <color name="bottomnav_bg">#FFFFFF</color>
+    <color name="icon_on_navy">#111827</color>     <!-- icon color in light mode -->
+    <color name="divider_navy">#E6E8EC</color>
+    <color name="content_bg">#FFFFFF</color>
+    <color name="nav_unselected">#6B7280</color>
+    <color name="accent_mint">#2ED3C6</color>
+</resources>

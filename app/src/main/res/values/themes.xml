@@ -1,0 +1,26 @@
+<resources xmlns:tools="http://schemas.android.com/tools">
+
+    <style name="Base.Theme.Evenly_Android" parent="Theme.Material3.DayNight.NoActionBar">
+
+        <!-- Brand / accent -->
+        <item name="colorPrimary">@color/topbar_bg</item>
+        <item name="colorOnPrimary">@color/icon_on_navy</item>
+
+        <!-- Accent used for highlights (selected tab, buttons, etc.) -->
+        <item name="colorSecondary">@color/accent_mint</item>
+        <item name="colorOnSecondary">@color/topbar_bg</item>
+
+        <!-- App surfaces -->
+        <item name="colorSurface">@color/content_bg</item>
+        <item name="colorOnSurface">@color/icon_on_navy</item>
+
+        <!-- Status/navigation bar behavior (safe defaults) -->
+        <item name="android:statusBarColor">@color/topbar_bg</item>
+        <item name="android:navigationBarColor">@color/bottomnav_bg</item>
+
+        <!-- Optional: prevents weird auto-contrast in some previews -->
+        <item name="android:forceDarkAllowed" tools:targetApi="q">true</item>
+    </style>
+
+    <style name="Theme.Evenly_Android" parent="Base.Theme.Evenly_Android" />
+</resources>
