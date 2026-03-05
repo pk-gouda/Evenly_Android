@@ -1,10 +1,13 @@
 package com.prathik.evenly_android.controller.expense;
 
 import android.content.IntentSender;
+import android.graphics.Rect;
 import android.net.Uri;
 import android.os.Bundle;
 import android.util.Log;
+import android.view.View;
 import android.widget.ImageButton;
+import android.widget.LinearLayout;
 import android.widget.TextView;
 import android.widget.Toast;
 
@@ -13,26 +16,30 @@ import androidx.activity.result.IntentSenderRequest;
 import androidx.activity.result.contract.ActivityResultContracts;
 import androidx.appcompat.app.AlertDialog;
 import androidx.appcompat.app.AppCompatActivity;
+import androidx.cardview.widget.CardView;
 
 import com.google.android.gms.tasks.Task;
+import com.google.mlkit.vision.common.InputImage;
 import com.google.mlkit.vision.documentscanner.GmsDocumentScanner;
 import com.google.mlkit.vision.documentscanner.GmsDocumentScannerOptions;
 import com.google.mlkit.vision.documentscanner.GmsDocumentScanning;
 import com.google.mlkit.vision.documentscanner.GmsDocumentScanningResult;
-import com.prathik.evenly_android.R;
-import android.graphics.Rect;
-
-import com.google.mlkit.vision.common.InputImage;
 import com.google.mlkit.vision.text.Text;
 import com.google.mlkit.vision.text.TextRecognition;
 import com.google.mlkit.vision.text.latin.TextRecognizerOptions;
 
+import com.prathik.evenly_android.R;
 import com.prathik.evenly_android.model.ocr.OcrLine;
 import com.prathik.evenly_android.model.ocr.ReceiptGridRow;
+import com.prathik.evenly_android.model.receipt.OcrCleaner;
+import com.prathik.evenly_android.model.receipt.ParsedReceipt;
+import com.prathik.evenly_android.model.receipt.ReceiptLineItem;
 import com.prathik.evenly_android.service.ocr.ReceiptGridBuilder;
+import com.prathik.evenly_android.service.receipt.ReceiptItemExtractor;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 
 public class AddExpenseActivity extends AppCompatActivity {
 
@@ -41,12 +48,19 @@ public class AddExpenseActivity extends AppCompatActivity {
     public static final String CONTEXT_FRIEND = "FRIEND";
 
     private TextView tvHeader;
-    private TextView tvDebug;
+    private CardView cardItemization;
+    private LinearLayout llItems;
+    private TextView tvSubtotal;
+    private TextView tvTaxLabel;
+    private TextView tvTax;
+    private TextView tvTotal;
+    private TextView tvIssues;
+    private TextView tvDebug;  // temporary debug view
 
     // Gallery picker
     private final ActivityResultLauncher<String> pickImageLauncher =
             registerForActivityResult(new ActivityResultContracts.GetContent(), uri -> {
-                if (uri != null) showPickedImageUri(uri);
+                if (uri != null) runOcrParseAndRender(uri);
             });
 
     // Document scanner result
@@ -66,7 +80,7 @@ public class AddExpenseActivity extends AppCompatActivity {
                 }
 
                 Uri imageUri = scanResult.getPages().get(0).getImageUri();
-                showPickedImageUri(imageUri);
+                runOcrParseAndRender(imageUri);
             });
 
     @Override
@@ -77,14 +91,22 @@ public class AddExpenseActivity extends AppCompatActivity {
         String contextType = getIntent().getStringExtra(EXTRA_CONTEXT_TYPE);
         if (contextType == null) contextType = CONTEXT_GROUP;
 
-        tvHeader = findViewById(R.id.tvHeader);
-        tvDebug = findViewById(R.id.tvDebug);
+        tvHeader        = findViewById(R.id.tvHeader);
+        cardItemization = findViewById(R.id.cardItemization);
+        llItems         = findViewById(R.id.llItems);
+        tvSubtotal      = findViewById(R.id.tvSubtotal);
+        tvTaxLabel      = findViewById(R.id.tvTaxLabel);
+        tvTax           = findViewById(R.id.tvTax);
+        tvTotal         = findViewById(R.id.tvTotal);
+        tvIssues        = findViewById(R.id.tvIssues);
 
         tvHeader.setText(contextType.equals(CONTEXT_FRIEND) ? "Add expense • Friend" : "Add expense • Group");
 
         ImageButton btnReceipt = findViewById(R.id.btnReceiptImage);
         btnReceipt.setOnClickListener(v -> showImageSourceChooser());
     }
+
+    // ── Image source ──────────────────────────────────────────────────────────
 
     private void showImageSourceChooser() {
         new AlertDialog.Builder(this)
@@ -120,15 +142,63 @@ public class AddExpenseActivity extends AppCompatActivity {
                 });
     }
 
-    private void showPickedImageUri(Uri uri) {
-        tvDebug.setText("Picked image: " + uri);
-        runOcrAndShowGrid(uri);
-        // Next: run OCR on this URI -> feed into parser
+    // ── OCR pipeline ──────────────────────────────────────────────────────────
+
+    private void runOcrParseAndRender(Uri imageUri) {
+        try {
+            InputImage image = InputImage.fromFilePath(this, imageUri);
+
+            TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
+                    .process(image)
+                    .addOnSuccessListener(text -> {
+                        // 1. Extract raw OCR lines with bounding boxes
+                        List<OcrLine> rawLines = extractLinesWithBoxes(text);
+
+                        // 2. Clean each line through OcrCleaner
+                        List<OcrLine> cleanedLines = new ArrayList<>();
+                        for (OcrLine line : rawLines) {
+                            String cleaned = OcrCleaner.cleanLine(line.text);
+                            if (!cleaned.isEmpty()) {
+                                cleanedLines.add(new OcrLine(cleaned, line.box));
+                            }
+                        }
+
+                        // 3. Build spatial grid
+                        List<ReceiptGridRow> grid = ReceiptGridBuilder.buildGrid(cleanedLines);
+
+                        // 4. Parse items and totals
+                        ParsedReceipt receipt = ReceiptItemExtractor.parse(grid);
+
+                        // 5. Render the itemization card
+                        renderItemization(receipt);
+
+                        // DEBUG: show raw grid + parse result on screen
+                        StringBuilder dbg = new StringBuilder();
+                        dbg.append("RAW LINES (").append(rawLines.size()).append("):\n");
+                        for (OcrLine ol : rawLines) dbg.append("  ").append(ol.text).append("\n");
+                        dbg.append("\nCLEANED (").append(cleanedLines.size()).append("):\n");
+                        for (OcrLine ol : cleanedLines) dbg.append("  ").append(ol.text).append("\n");
+                        dbg.append("\nGRID (").append(grid.size()).append(" rows):\n");
+                        for (ReceiptGridRow row : grid) dbg.append("  [").append(row.leftText).append("] | [").append(row.rightText).append("]\n");
+                        dbg.append("\nITEMS (").append(receipt.items.size()).append("):\n");
+                        for (ReceiptLineItem item : receipt.items) dbg.append("  ").append(item.toString()).append("\n");
+                        if (tvDebug != null) tvDebug.setText(dbg.toString());
+                        Log.d("RECEIPT_DBG", dbg.toString());
+                        Log.d("RECEIPT", buildDebugLog(receipt));
+                    })
+                    .addOnFailureListener(e -> {
+                        Toast.makeText(this, "OCR failed: " + e.getMessage(), Toast.LENGTH_LONG).show();
+                        Log.e("OCR", "OCR failed", e);
+                    });
+
+        } catch (Exception e) {
+            Toast.makeText(this, "Could not load image: " + e.getMessage(), Toast.LENGTH_LONG).show();
+            Log.e("OCR", "Could not load image", e);
+        }
     }
 
     private List<OcrLine> extractLinesWithBoxes(Text visionText) {
         List<OcrLine> lines = new ArrayList<>();
-
         for (Text.TextBlock block : visionText.getTextBlocks()) {
             for (Text.Line line : block.getLines()) {
                 Rect box = line.getBoundingBox();
@@ -141,28 +211,110 @@ public class AddExpenseActivity extends AppCompatActivity {
         return lines;
     }
 
-    private void runOcrAndShowGrid(Uri imageUri) {
-        try {
-            InputImage image = InputImage.fromFilePath(this, imageUri);
+    // ── Render ────────────────────────────────────────────────────────────────
 
-            TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
-                    .process(image)
-                    .addOnSuccessListener(text -> {
-                        List<OcrLine> ocrLines = extractLinesWithBoxes(text);
-                        List<ReceiptGridRow> grid = ReceiptGridBuilder.buildGrid(ocrLines);
+    private void renderItemization(ParsedReceipt receipt) {
+        cardItemization.setVisibility(View.VISIBLE);
+        llItems.removeAllViews();
 
-                        StringBuilder sb = new StringBuilder();
-                        sb.append("RECEIPT GRID:\n\n");
-                        for (ReceiptGridRow row : grid) {
-                            sb.append(row.toString()).append("\n");
-                        }
-
-                        tvDebug.setText(sb.toString());   // <-- this is what you want to see
-                    })
-                    .addOnFailureListener(e -> tvDebug.setText("OCR failed: " + e.getMessage()));
-
-        } catch (Exception e) {
-            tvDebug.setText("Could not load image: " + e.getMessage());
+        for (ReceiptLineItem item : receipt.items) {
+            llItems.addView(makeItemRow(item));
         }
+
+        if (receipt.items.isEmpty()) {
+            TextView empty = new TextView(this);
+            empty.setText("No items detected");
+            empty.setTextColor(0xFF999999);
+            empty.setTextSize(13);
+            llItems.addView(empty);
+        }
+
+        // Subtotal
+        double sub = receipt.summary.subtotal != null
+                ? receipt.summary.subtotal : receipt.computedSubtotal;
+        tvSubtotal.setText(formatMoney(sub));
+
+        // Tax
+        double tax = receipt.summary.taxAmount != null
+                ? receipt.summary.taxAmount : receipt.computedTax;
+        if (receipt.summary.taxPercent != null && receipt.summary.taxPercent > 0) {
+            tvTaxLabel.setText(String.format(Locale.US, "Tax (%.2f%%)", receipt.summary.taxPercent));
+        }
+        tvTax.setText(formatMoney(tax));
+
+        // Total
+        double total = receipt.summary.total != null
+                ? receipt.summary.total : receipt.computedTotal;
+        tvTotal.setText(formatMoney(total));
+
+        // Issues
+        if (!receipt.issues.isEmpty()) {
+            StringBuilder warn = new StringBuilder("⚠ ");
+            for (int i = 0; i < receipt.issues.size(); i++) {
+                if (i > 0) warn.append(", ");
+                warn.append(receipt.issues.get(i).toString().replace("_", " "));
+            }
+            tvIssues.setText(warn.toString());
+            tvIssues.setVisibility(View.VISIBLE);
+        } else {
+            tvIssues.setVisibility(View.GONE);
+        }
+    }
+
+    private LinearLayout makeItemRow(ReceiptLineItem item) {
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        LinearLayout.LayoutParams rowParams = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT);
+        rowParams.setMargins(0, 0, 0, dpToPx(6));
+        row.setLayoutParams(rowParams);
+
+        TextView tvName = new TextView(this);
+        LinearLayout.LayoutParams nameParams = new LinearLayout.LayoutParams(
+                0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f);
+        tvName.setLayoutParams(nameParams);
+        tvName.setText(item.name);
+        tvName.setTextSize(13);
+        tvName.setTextColor(0xFF333333);
+
+        TextView tvPrice = new TextView(this);
+        LinearLayout.LayoutParams priceParams = new LinearLayout.LayoutParams(
+                dpToPx(80), LinearLayout.LayoutParams.WRAP_CONTENT);
+        tvPrice.setLayoutParams(priceParams);
+        tvPrice.setText(formatMoney(item.amount != null ? item.amount : 0));
+        tvPrice.setTextSize(13);
+        tvPrice.setTextColor(item.amount != null && item.amount < 0 ? 0xFFD32F2F : 0xFF333333);
+        tvPrice.setGravity(android.view.Gravity.END);
+
+        row.addView(tvName);
+        row.addView(tvPrice);
+        return row;
+    }
+
+    // ── Helpers ───────────────────────────────────────────────────────────────
+
+    private String formatMoney(double amount) {
+        return String.format(Locale.US, "$%.2f", amount);
+    }
+
+    private int dpToPx(int dp) {
+        float density = getResources().getDisplayMetrics().density;
+        return Math.round(dp * density);
+    }
+
+    private String buildDebugLog(ParsedReceipt receipt) {
+        StringBuilder sb = new StringBuilder("── ITEMS ──\n");
+        for (ReceiptLineItem item : receipt.items) {
+            sb.append(item.toString()).append("\n");
+        }
+        sb.append("\n── SUMMARY ──\n");
+        sb.append("Subtotal: ").append(formatMoney(receipt.computedSubtotal)).append("\n");
+        sb.append("Tax:      ").append(formatMoney(receipt.computedTax)).append("\n");
+        sb.append("Total:    ").append(formatMoney(receipt.computedTotal)).append("\n");
+        if (!receipt.issues.isEmpty()) {
+            sb.append("Issues: ").append(receipt.issues).append("\n");
+        }
+        return sb.toString();
     }
 }

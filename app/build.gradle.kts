@@ -41,6 +41,7 @@ dependencies {
     implementation(libs.activity)
     implementation(libs.constraintlayout)
     implementation("androidx.recyclerview:recyclerview:1.3.2")
+    implementation("androidx.cardview:cardview:1.0.0")
     implementation("com.google.mlkit:text-recognition:16.0.1")
     // Document Scanner (auto-crop + perspective + scan UI)
     implementation("com.google.android.gms:play-services-mlkit-document-scanner:16.0.0")
