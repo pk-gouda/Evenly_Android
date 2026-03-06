@@ -48,32 +48,33 @@ public class ReceiptGridBuilder {
         List<GridRow> rows = new ArrayList<>();
         GridRow current = null;
 
-        int runningRowY = -1;
-        int runningRowHeight = 0;
+        int anchorY = -1;       // Y of the FIRST word in the current row (does not drift)
+        int rowHeight = 0;
 
         for (OcrLine l : lines) {
             if (current == null) {
                 current = new GridRow();
                 current.add(l);
                 rows.add(current);
-                runningRowY = l.centerY();
-                runningRowHeight = Math.max(1, l.height());
+                anchorY = l.centerY();
+                rowHeight = Math.max(1, l.height());
                 continue;
             }
 
-            int threshold = Math.max(12, (int)(runningRowHeight * 0.7));
-            int dy = Math.abs(l.centerY() - runningRowY);
+            // Words must be within 45% of line height of the row anchor
+            int threshold = Math.max(8, (int)(rowHeight * 0.45));
+            int dy = Math.abs(l.centerY() - anchorY);
 
             if (dy <= threshold) {
                 current.add(l);
-                runningRowY = (runningRowY + l.centerY()) / 2;
-                runningRowHeight = (runningRowHeight + Math.max(1, l.height())) / 2;
+                // Do NOT update anchorY — keep it fixed to the first word
+                rowHeight = Math.max(rowHeight, Math.max(1, l.height()));
             } else {
                 current = new GridRow();
                 current.add(l);
                 rows.add(current);
-                runningRowY = l.centerY();
-                runningRowHeight = Math.max(1, l.height());
+                anchorY = l.centerY();
+                rowHeight = Math.max(1, l.height());
             }
         }
 

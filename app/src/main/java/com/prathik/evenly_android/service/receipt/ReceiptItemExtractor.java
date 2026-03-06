@@ -226,28 +226,24 @@ public class ReceiptItemExtractor {
                 continue;
             }
 
-            // TOTAL — prefer "grand total" and "amount paid" over plain "total"
+            // TOTAL — high-priority keywords insert at front; plain "total" appends
             if (containsAny(lower, "total charged", "amount paid", "grand total",
-                    "total amount", "amount due", "balance due")) {
-                totalCandidates.add(amt);
+                    "total amount", "amount due", "balance due", "balance")) {
+                totalCandidates.add(0, amt); // high-priority: insert at front
                 continue;
             }
             if (containsAny(lower, "total", "tota!", "tota1")) {
                 if (!containsAny(lower, "original charge", "credit", "credits",
                         "temporary", "authorized", "hold", "discount", "savings",
-                        "items total", "item total")) {
-                    totalCandidates.add(amt);
+                        "items total", "item total", "for u", "foru", "your")) {
+                    totalCandidates.add(amt); // low-priority: append
                 }
             }
         }
 
-        // Pick the best total (largest plausible candidate)
+        // Pick first candidate — high-priority ones are inserted at front
         if (!totalCandidates.isEmpty()) {
-            Double best = totalCandidates.get(0);
-            for (Double v : totalCandidates) {
-                if (v != null && v > best) best = v;
-            }
-            out.summary.total = best;
+            out.summary.total = totalCandidates.get(0);
         }
 
         out.summary.subtotal  = subtotal;
@@ -776,9 +772,9 @@ public class ReceiptItemExtractor {
     // ── Jewel-Osco extractor ──────────────────────────────────────────────────
 
     private static void extractItemsJewelOsco(ParsedReceipt out, List<ReceiptGridRow> grid) {
-        Pattern YOU_PAY = Pattern.compile("^(\\d+\\.\\d{2})\\s*[Bb]?\\s*$");
+        Pattern YOU_PAY = Pattern.compile("(?i)(?:you\\s+pay\\s+|price\\s+)?(\\d+\\.\\d{2})\\s*[Bb]?\\s*$");
         Pattern JEWEL_COUPON = Pattern.compile(
-                "(?i)^(for[u!]?\\s+store\\s+coup|sale\\s+sav|store\\s+sav|for\\s+u\\s+sav|your\\s+sav)");
+                "(?i)^(f[io0]{0,2}r\\s*[u!]?\\s+store\\s+coup|sale\\s+sav|store\\s+sav|for\\s+[u!]\\s+sav|your\\s+sav|f[io0]{0,2}r[u!]\\s+store)");
         Pattern WEIGHT_LINE = Pattern.compile("(?i)\\d+\\.\\d+\\s+(?:lb|oz)\\s+@");
         Pattern JEWEL_NOISE = Pattern.compile(
                 "(?i)^(produce|your\\s+cashier|credit\\s+purchase|card\\s+#|ref:|payment\\s+amount"
@@ -794,9 +790,28 @@ public class ReceiptItemExtractor {
             String leftLower = left.toLowerCase(Locale.US);
 
             if (left.isEmpty() && right.isEmpty()) continue;
-            if (JEWEL_COUPON.matcher(left).find()) continue;
+
+            // Hard stop — once we see the balance/tax line, no more items below
+            if (containsAny(leftLower, "balance", "subtotal", "tax")) {
+                break;
+            }
+
+            if (JEWEL_COUPON.matcher(left).find()) {
+                // Even if this row contains coupon text, it may also contain an item
+                // e.g. "4062 forU Store Coupon -3.99 20 CUCUMBERS 1.98" RIGHT="1.00 B"
+                // Try to salvage: strip the coupon segment and check if a valid item remains
+                String stripped = left
+                        .replaceAll("(?i)f[io0]{0,2}r\\s*[u!]?\\s+store\\s+coup[^\\d]*-?\\d+\\.\\d+\\s*", " ")
+                        .replaceAll("(?i)sale\\s+sav[^\\d]*-?\\d+\\.\\d+\\s*", " ")
+                        .replaceAll("\\s{2,}", " ").trim();
+                String salvaged = extractJewelName(stripped);
+                if (salvaged != null && !salvaged.isEmpty()) {
+                    pendingName = salvaged;
+                }
+                continue;
+            }
             if (JEWEL_NOISE.matcher(left).find()) continue;
-            if (containsAny(leftLower, "tax", "balance", "subtotal")) continue;
+            if (containsAny(leftLower, "total", "savings", "payment", "miscellaneous")) continue;
 
             Matcher youPayM = YOU_PAY.matcher(right);
             if (!youPayM.matches()) {
@@ -817,6 +832,8 @@ public class ReceiptItemExtractor {
             if (name == null || name.isEmpty()) continue;
             if (Math.abs(youPay) < 0.01) continue;
 
+            // All Jewel items are non-taxable at item level (tax shown as single line)
+            // Bag fees are also non-taxable
             out.items.add(new ReceiptLineItem(name, youPay, false, 0.9));
         }
     }
