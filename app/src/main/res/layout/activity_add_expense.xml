@@ -207,6 +207,19 @@
             </LinearLayout>
         </androidx.cardview.widget.CardView>
 
+
+        <!-- Split Receipt Button (shown after scan) -->
+        <Button
+            android:id="@+id/btnSplitReceipt"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:text="Split This Receipt →"
+            android:textColor="#FFFFFF"
+            android:backgroundTint="#1565C0"
+            android:textStyle="bold"
+            android:visibility="gone" />
+
         <!-- DEBUG: temporary, remove once parsing is confirmed working -->
         <TextView
             android:id="@+id/tvDebug"

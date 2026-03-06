@@ -35,6 +35,9 @@
 
         <activity android:name=".controller.scan.ReceiptScanActivity" />
 
+
+        <activity android:name=".controller.split.ItemAssignmentActivity" />
+        <activity android:name=".controller.split.SplitSummaryActivity" />
     </application>
     <uses-permission android:name="android.permission.INTERNET" />
 
