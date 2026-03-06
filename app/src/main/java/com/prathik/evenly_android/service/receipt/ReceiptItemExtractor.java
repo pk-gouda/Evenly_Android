@@ -40,7 +40,7 @@ public class ReceiptItemExtractor {
 
     /** Fixes "11 00" → 11.00 (OCR space instead of decimal point) */
     private static final Pattern MONEY_WITH_SPACE =
-            Pattern.compile("[-]?(\\d{1,3}(?:,\\d{3})*|\\d+)\\s(\\d{2})\\b");
+            Pattern.compile("(?<![A-Za-z\\d])[-]?(\\d{1,3}(?:,\\d{3})*|\\d+)\\s(\\d{2})\\b");
 
     /** Costco trailing tax code: " E", " A", " AF" at end of line */
     private static final Pattern TAX_CODE_SUFFIX =
@@ -316,7 +316,11 @@ public class ReceiptItemExtractor {
 
             String lower = full.toLowerCase(Locale.US);
 
-            if (containsAny(lower, "credit card sale", "credit card", "card sale")) {
+            // Stop parsing items when we hit the payment section
+            // Use fuzzy match to handle OCR errors: "cridi card sate" = "credit card sale"
+            if (containsAny(lower, "credit card", "card sale", "card number", "card #")
+                    || lower.matches(".*cr[ie]d[ie]t?.*card.*")
+                    || lower.matches(".*card.*sal[et].*")) {
                 inItemArea = false;
                 continue;
             }
@@ -348,6 +352,11 @@ public class ReceiptItemExtractor {
             }
 
             if (Math.abs(amt) < 0.05) continue;
+
+            // Hard stop — subtotal/total marks the end of the item list
+            if (containsAny(lower, "subtotal", "sub total", "total", "grand total")) {
+                break;
+            }
             if (looksLikeSummary(lower)) continue;
 
             boolean isDiscount = containsAny(lower, "saving", "savings", "discount", "promo", "coupon");
@@ -729,7 +738,11 @@ public class ReceiptItemExtractor {
 
             String lower = full.toLowerCase(Locale.US);
 
-            if (containsAny(lower, "credit card sale", "credit card", "card sale")) {
+            // Stop parsing items when we hit the payment section
+            // Use fuzzy match to handle OCR errors: "cridi card sate" = "credit card sale"
+            if (containsAny(lower, "credit card", "card sale", "card number", "card #")
+                    || lower.matches(".*cr[ie]d[ie]t?.*card.*")
+                    || lower.matches(".*card.*sal[et].*")) {
                 inItemArea = false;
                 continue;
             }
@@ -772,7 +785,13 @@ public class ReceiptItemExtractor {
     // ── Jewel-Osco extractor ──────────────────────────────────────────────────
 
     private static void extractItemsJewelOsco(ParsedReceipt out, List<ReceiptGridRow> grid) {
-        Pattern YOU_PAY = Pattern.compile("(?i)(?:you\\s+pay\\s+|price\\s+)?(\\d+\\.\\d{2})\\s*[Bb]?\\s*$");
+        // Matches the LAST price in the right column, optionally followed by a tax code letter.
+        // This handles three Jewel-Osco right-column formats:
+        //   "0.54 B"         → single price (identical repeated prices → keep last)
+        //   "0.54 0.54 B"    → two identical prices → last = actual price paid
+        //   "10.35 2.39 B"   → original price + final price → last = actual price paid
+        //   "You Pay 2.39 B" → label + price → last = actual price paid
+        Pattern YOU_PAY = Pattern.compile("(\\d+\\.\\d{2})\\s*[Bb]?\\s*$");
         Pattern JEWEL_COUPON = Pattern.compile(
                 "(?i)^(f[io0]{0,2}r\\s*[u!]?\\s+store\\s+coup|sale\\s+sav|store\\s+sav|for\\s+[u!]\\s+sav|your\\s+sav|f[io0]{0,2}r[u!]\\s+store)");
         Pattern WEIGHT_LINE = Pattern.compile("(?i)\\d+\\.\\d+\\s+(?:lb|oz)\\s+@");
@@ -782,9 +801,16 @@ public class ReceiptItemExtractor {
                         + "|your\\s+points|price|you\\s+pay|thank\\s+you|for\\s+jewel|\\*{3,}"
                         + "|total\\s+umber|total\\s+number|\\d{2}/\\d{2}/\\d{2})");
 
+        // Pattern to extract saving amount from a coupon/savings row left column
+        Pattern SAVING_AMT = Pattern.compile("-?(\\d+\\.\\d{2})\\s*$");
+
+        // Matches ALL prices in a string — used to find every price token in a row
+        Pattern ALL_PRICES = Pattern.compile("(\\d+\\.\\d{2})");
+
         String pendingName = null;
 
-        for (ReceiptGridRow row : grid) {
+        for (int i = 0; i < grid.size(); i++) {
+            ReceiptGridRow row = grid.get(i);
             String left      = safe(row.leftText).trim();
             String right     = safe(row.rightText).trim();
             String leftLower = left.toLowerCase(Locale.US);
@@ -797,9 +823,8 @@ public class ReceiptItemExtractor {
             }
 
             if (JEWEL_COUPON.matcher(left).find()) {
-                // Even if this row contains coupon text, it may also contain an item
+                // Salvage: strip coupon segment and check if a valid item name remains
                 // e.g. "4062 forU Store Coupon -3.99 20 CUCUMBERS 1.98" RIGHT="1.00 B"
-                // Try to salvage: strip the coupon segment and check if a valid item remains
                 String stripped = left
                         .replaceAll("(?i)f[io0]{0,2}r\\s*[u!]?\\s+store\\s+coup[^\\d]*-?\\d+\\.\\d+\\s*", " ")
                         .replaceAll("(?i)sale\\s+sav[^\\d]*-?\\d+\\.\\d+\\s*", " ")
@@ -813,28 +838,121 @@ public class ReceiptItemExtractor {
             if (JEWEL_NOISE.matcher(left).find()) continue;
             if (containsAny(leftLower, "total", "savings", "payment", "miscellaneous")) continue;
 
-            Matcher youPayM = YOU_PAY.matcher(right);
-            if (!youPayM.matches()) {
-                if (!WEIGHT_LINE.matcher(left).find() && !left.isEmpty()) {
+            // ── Skip non-item rows before attempting price extraction ────────
+            // Weight lines (e.g. "2.89 lb @ $1.99 /lb") contain prices but are
+            // not items. Skip them here; they may set pendingName for the item above.
+            if (WEIGHT_LINE.matcher(left).find()) continue;
+
+            // ── Resolve the price source ──────────────────────────────────────
+            // Two cases:
+            //   NORMAL:   RIGHT has the price  (e.g. RIGHT="2.00 B")
+            //             LEFT has the name    (e.g. LEFT="4062 2@ CUCUMBERS 1.98")
+            //   MERGED:   RIGHT is empty, ML Kit returned whole row as one LEFT string
+            //             (e.g. LEFT="4441900068 4@ PEPPERS BELL GREEN 3.96 2.00 B")
+            //
+            // In BOTH cases the Jewel format is: NAME ... [ORIG_PRICE] FINAL_PRICE [B]
+            // The LAST price token is always the "You Pay" price.
+            // The second-to-last (if distinct) is the original sticker price.
+            //
+            // We ONLY fall back to parsing prices from LEFT when RIGHT is empty.
+            // This prevents coupon/weight amounts in LEFT from being mistaken for prices.
+            // ─────────────────────────────────────────────────────────────────
+            // ── Resolve orig price and final price ───────────────────────────
+            // Three formats on Jewel receipts:
+            //
+            //   RIGHT="2.00 B"  LEFT="...ITEM 5.99"
+            //     → RIGHT has final, LEFT tail has orig (5.99)
+            //
+            //   RIGHT="5.99 2.00 B"
+            //     → RIGHT has both: orig=5.99, final=2.00
+            //
+            //   RIGHT=""  LEFT="...ITEM 3.96 2.00 B"   (merged row)
+            //     → LEFT tail has both: orig=3.96, final=2.00
+            // ─────────────────────────────────────────────────────────────────
+            Pattern TAIL_PRICES = Pattern.compile(
+                    "(\\d+\\.\\d{2})\\s+(?:(\\d+\\.\\d{2})\\s*)?[Bb]?\\s*$");
+
+            double finalPrice, origPrice;
+
+            if (!right.isEmpty()) {
+                java.util.List<Double> rp = new java.util.ArrayList<>();
+                Matcher allM = ALL_PRICES.matcher(right);
+                while (allM.find()) rp.add(Double.parseDouble(allM.group(1)));
+
+                if (rp.size() >= 2) {
+                    // RIGHT has orig + final
+                    origPrice  = rp.get(rp.size() - 2);
+                    finalPrice = rp.get(rp.size() - 1);
+                } else if (rp.size() == 1) {
+                    // RIGHT has final only — look for orig at tail of LEFT
+                    finalPrice = rp.get(0);
+                    java.util.List<Double> lp = new java.util.ArrayList<>();
+                    Matcher lm = ALL_PRICES.matcher(left);
+                    while (lm.find()) lp.add(Double.parseDouble(lm.group(1)));
+                    origPrice = lp.isEmpty() ? finalPrice : lp.get(lp.size() - 1);
+                } else {
+                    // No price in right despite being non-empty (e.g. "You Pay" label)
                     String extracted = extractJewelName(left);
                     if (extracted != null) pendingName = extracted;
+                    continue;
                 }
-                continue;
+            } else {
+                // Merged row — both prices embedded at tail of LEFT
+                Matcher tailM = TAIL_PRICES.matcher(left);
+                if (!tailM.find()) {
+                    String extracted = extractJewelName(left);
+                    if (extracted != null) pendingName = extracted;
+                    continue;
+                }
+                if (tailM.group(2) != null) {
+                    origPrice  = Double.parseDouble(tailM.group(1));
+                    finalPrice = Double.parseDouble(tailM.group(2));
+                } else {
+                    origPrice  = Double.parseDouble(tailM.group(1));
+                    finalPrice = origPrice;
+                }
             }
 
-            double youPay = Double.parseDouble(youPayM.group(1));
-            if (youPay <= 0) continue;
+            if (finalPrice <= 0) continue;
 
+            // ── Discount cross-validation ─────────────────────────────────────
+            // Sum ALL consecutive discount/coupon lines immediately after this item
+            // (skip weight lines).  Validate: origPrice - totalDiscount ≈ finalPrice.
+            // If math checks out → confidence 0.95, otherwise 0.90.
+            double confidence = 0.90;
+            double totalDiscount = 0.0;
+            for (int j = i + 1; j < grid.size(); j++) {
+                String nextLeft = safe(grid.get(j).leftText).trim();
+                if (nextLeft.isEmpty()) continue;
+                if (WEIGHT_LINE.matcher(nextLeft).find()) continue;
+
+                // Is this a discount line? (coupon or savings with a negative amount)
+                boolean isCoupon  = JEWEL_COUPON.matcher(nextLeft).find();
+                boolean isSavings = nextLeft.toLowerCase(Locale.US).contains("saving");
+                if (isCoupon || isSavings) {
+                    Matcher savM = SAVING_AMT.matcher(nextLeft);
+                    if (savM.find()) totalDiscount += Double.parseDouble(savM.group(1));
+                    // continue summing — there may be multiple discount lines
+                } else {
+                    break; // hit the next item or a non-discount row
+                }
+            }
+
+            if (totalDiscount > 0.005
+                    && Math.abs((origPrice - totalDiscount) - finalPrice) < 0.02) {
+                confidence = 0.95;
+            }
+            // ─────────────────────────────────────────────────────────────────
+
+            // Extract name — prefer LEFT column regardless of where price came from
             String name = extractJewelName(left);
             if (name == null && pendingName != null) name = pendingName;
             pendingName = null;
 
             if (name == null || name.isEmpty()) continue;
-            if (Math.abs(youPay) < 0.01) continue;
+            if (Math.abs(finalPrice) < 0.01) continue;
 
-            // All Jewel items are non-taxable at item level (tax shown as single line)
-            // Bag fees are also non-taxable
-            out.items.add(new ReceiptLineItem(name, youPay, false, 0.9));
+            out.items.add(new ReceiptLineItem(name, finalPrice, false, confidence));
         }
     }
 
@@ -898,7 +1016,8 @@ public class ReceiptItemExtractor {
     private static String extractNameFromRow(String full, double amt) {
         String t = full;
         t = t.replaceAll("[-]?\\d{1,3}(?:,\\d{3})*(?:[\\.,]\\d{2})", " ");
-        t = t.replace("|", " ").replaceAll("\\s+", " ").trim();
+        t = t.replace("|", " ").replace("$", " ");  // strip dollar signs
+        t = t.replaceAll("\\s+", " ").trim();
         t = QTY_PREFIX.matcher(t).replaceFirst("");
         return t.trim();
     }
@@ -999,6 +1118,8 @@ public class ReceiptItemExtractor {
     // ── Noise detection ───────────────────────────────────────────────────────
 
     private static boolean looksLikeSummary(String lower) {
+        // Also catch OCR variants of "tax": lax, tix, tex, txx, etc.
+        if (lower.matches(".*(?:sales|grocery|state|local|city)?\\s*[lt][ae][x-z]\\s*\\d.*")) return true;
         return containsAny(lower,
                 "subtotal", "sub total", "items subtotal", "item total",
                 "sales tax", "grocery tax", "taxes and fees", "state tax",
